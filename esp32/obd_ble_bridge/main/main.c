@@ -7,6 +7,10 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 
+// Dichiarazioni esterne per BLE
+extern void ble_init(void);
+extern void send_ble_notify(const char *data, size_t len);
+
 #define UART_NUM UART_NUM_0
 #define BUF_SIZE 512
 
@@ -79,7 +83,6 @@ void parse_and_print(const char *data, obd_data_t *obd) {
         token = strtok(NULL, ";");
     }
 
-    // Stampa stato completo
     ESP_LOGI(TAG, "=== Dati OBD ricevuti ===");
     if (obd->rpm != -1)     ESP_LOGI(TAG, "RPM: %d", obd->rpm);
     if (obd->speed != -1)   ESP_LOGI(TAG, "SPEED: %d", obd->speed);
@@ -111,6 +114,10 @@ void obd_uart_task(void *arg)
                 ESP_LOGI(TAG, "Pacchetto ricevuto: %s", (char*)data);
                 reset_obd_data(&obd);
                 parse_and_print((char*)data, &obd);
+
+                // Invia dati ricevuti via BLE al client connesso
+                send_ble_notify((char*)data, strlen((char*)data));
+
                 idx = 0; // reset buffer
             } else {
                 if (++idx >= BUF_SIZE - 1) {
@@ -136,6 +143,8 @@ void app_main(void)
     uart_driver_install(UART_NUM, BUF_SIZE * 2, 0, 0, NULL, 0);
 
     xTaskCreate(obd_uart_task, "obd_uart_task", 4096, NULL, 10, NULL);
+
+    ble_init();  // inizializza BLE server
 
     printf("Test print ESP32!\n");
 

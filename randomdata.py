@@ -5,6 +5,7 @@ import serial
 # Inizializza la porta seriale ESP32 (modifica se necessario)
 serial_port = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
 
+
 def genera_dati_obd():
     dati = {
         "RPM": random.randint(800, 4000),
