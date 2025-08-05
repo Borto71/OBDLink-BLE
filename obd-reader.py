@@ -2,7 +2,7 @@ import obd
 import time
 
 # Connetti alla porta OBD-II (modifica la porta se serve, es: '/dev/ttyUSB0' o 'COM5')
-connection = obd.OBD()  # tenta di aprire la prima porta disponibile
+connection = obd.OBD(portstr="/dev/ttyUSB0", baudrate=115200)
 
 if not connection.is_connected():
     print("Errore: non è stato possibile connettersi all'adattatore OBD")
