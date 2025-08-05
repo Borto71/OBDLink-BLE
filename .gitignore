@@ -1,0 +1,19 @@
+# Ignora la cartella di build (file compilati, temporanei)
+build/
+*.bin
+*.elf
+*.map
+
+# Ignora i file di log del monitor
+*.log
+
+# Ignora i file di configurazione locali generati da idf.py
+sdkconfig.old
+sdkconfig.defaults
+
+# Ignora file di backup degli editor
+*~
+*.swp
+
+# Visual Studio Code settings locali (opzionale, se usi solo tu il progetto)
+.vscode/
