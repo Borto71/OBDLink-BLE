@@ -1,9 +1,4 @@
 idf_component_register(
-    SRCS "ble_server.c" "main.c"
+    SRCS "main.c" "ble_server.c" "error_snapshot.c"
     INCLUDE_DIRS "."
-    PRIV_REQUIRES bt driver nvs_flash
 )
-
-
-
-
