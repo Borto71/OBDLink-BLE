@@ -5,33 +5,29 @@
 #include "freertos/task.h"
 #include "driver/uart.h"
 #include "esp_log.h"
-#include "error_snapshot.h"  
+#include "error_snapshot.h"
+#include "esp_spiffs.h"
 
 // DICHIARA qui le funzioni del tuo BLE server
 void ble_init(void);
 void send_ble_notify(const char *data, size_t len);
 extern bool device_connected;  // questa DEVE essere globale in ble_server.c
 
-#define UART_PORT_NUM      UART_NUM_0    // Cambia in UART_NUM_1 se usi RX/TX esterni
+#define UART_PORT_NUM      UART_NUM_0
 #define UART_BAUD_RATE     115200
 #define BUF_SIZE           256
 
 static const char *TAG = "MAIN";
 
-// Parsing semplice dei dati OBD (per snapshot)
 void parse_and_maybe_snapshot(const char* data) {
-    // Cerca ERROR_CODES:xxx tra i dati, poi estrae altri valori se presente errore
     char error_code[32] = "";
     int rpm = -1, speed = -1, temp = -1, fuel = -1, mil = -1;
     const char* p;
-    // Cerca ERROR_CODES
     p = strstr(data, "ERROR_CODES:");
     if (p) {
         sscanf(p, "ERROR_CODES:%31[^;]", error_code);
     }
-    // Solo se c'è errore reale
     if (strlen(error_code) > 0 && strcmp(error_code, "NONE") != 0) {
-        // Estrai parametri (puoi espandere se hai altri campi)
         p = strstr(data, "RPM:");
         if (p) sscanf(p, "RPM:%d", &rpm);
         p = strstr(data, "SPEED:");
@@ -43,24 +39,22 @@ void parse_and_maybe_snapshot(const char* data) {
         p = strstr(data, "MIL:");
         if (p) sscanf(p, "MIL:%d", &mil);
 
-        // Salva snapshot!
         error_snapshot_save(error_code, rpm, speed, temp, fuel, mil);
 
         ESP_LOGW(TAG, "!!! Snapshot errore salvato: codice=%s, rpm=%d, speed=%d, temp=%d, fuel=%d, mil=%d",
             error_code, rpm, speed, temp, fuel, mil);
 
         // Esempio: stampa tutti gli snapshot su seriale
-        int n = error_snapshot_get_count();
-        ESP_LOGW(TAG, "Hai %d snapshot errori:", n);
-        for (int i = 0; i < n; ++i) {
-            const error_snapshot_t* snap = error_snapshot_get(i);
-            printf("Errore: %s @ %llu us, RPM: %d, Speed: %d, Temp: %d, Fuel: %d, MIL: %d\n",
+        const error_snapshot_t* snap = error_snapshot_get(error_snapshot_get_count()-1);
+        if (snap) {
+            printf("Nuovo errore: %s @ %llu us, RPM: %d, Speed: %d, Temp: %d, Fuel: %d, MIL: %d\n",
                 snap->error_code, snap->timestamp_us, snap->rpm, snap->speed, snap->temp, snap->fuel, snap->mil);
         }
+
     }
 }
 
-// Task che gira in background, inoltra dati seriale -> BLE
+// Task bridge BLE<->seriale E BLE<->comandi speciali
 void serial_ble_bridge_task(void *arg)
 {
     uint8_t* data = (uint8_t*) malloc(BUF_SIZE);
@@ -72,12 +66,15 @@ void serial_ble_bridge_task(void *arg)
             if (data[len-1] == '\n' || len >= (BUF_SIZE-1)) {
                 data[len] = 0;
                 ESP_LOGI(TAG, "RX: %s", data);
+
+                // Comando speciale BLE (gestito in ble_server.c)
+                // --> nulla da fare qui per GET_ALL_ERRORS
+
                 if (device_connected) {
                     send_ble_notify((const char*)data, len);
                 } else {
                     ESP_LOGW(TAG, "BLE non connesso, messaggio ignorato");
                 }
-                // Qui analizza per snapshot errori
                 parse_and_maybe_snapshot((const char*)data);
                 len = 0;
             }
@@ -89,10 +86,24 @@ void serial_ble_bridge_task(void *arg)
 
 void app_main(void)
 {
-    // 1. Inizializza BLE
+    // Inizializza SPIFFS
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 3,
+      .format_if_mount_failed = true
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS Init fail (%d)", ret);
+    } else {
+        ESP_LOGI(TAG, "SPIFFS mounted OK");
+    }
+
+    // Inizializza BLE
     ble_init();
 
-    // 2. Configura UART
+    // Configura UART
     const uart_config_t uart_config = {
         .baud_rate = UART_BAUD_RATE,
         .data_bits = UART_DATA_8_BITS,
@@ -104,7 +115,6 @@ void app_main(void)
     uart_param_config(UART_PORT_NUM, &uart_config);
     uart_set_pin(UART_PORT_NUM, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    // 3. Avvia il task di bridge
     xTaskCreate(serial_ble_bridge_task, "serial_ble_bridge_task", 4096, NULL, 10, NULL);
 
     ESP_LOGI(TAG, "Bridge BLE<->Seriale avviato!");

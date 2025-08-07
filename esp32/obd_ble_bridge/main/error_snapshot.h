@@ -15,13 +15,14 @@ typedef struct {
     uint64_t timestamp_us;
 } error_snapshot_t;
 
-// Salva uno snapshot con tutti i dati correnti in caso di errore
+// --- Gestione memoria volatile ---
 void error_snapshot_save(const char* error_code, int rpm, int speed, int temp, int fuel, int mil);
-
-// Ritorna quanti snapshot sono attualmente salvati
 int error_snapshot_get_count(void);
-
-// Restituisce il puntatore allo snapshot all'indice idx (NULL se out of range)
 const error_snapshot_t* error_snapshot_get(int idx);
+
+// --- Gestione su SPIFFS (persistente) ---
+void error_snapshot_save_to_file(const error_snapshot_t* s);  // salva uno snapshot su file
+int error_snapshot_load_all_from_file(error_snapshot_t* arr, int max_count);  // carica tutti gli snapshot salvati, ritorna quanti letti
+void error_snapshot_clear_file(void); // cancella il file snapshot
 
 #endif // ERROR_SNAPSHOT_H
