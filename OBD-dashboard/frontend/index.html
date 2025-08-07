@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>OBD BLE Dashboard</title>
+  <style>
+    body { background: #181c25; color: #fff; font-family: Arial, sans-serif; padding: 40px;}
+    .dashboard { max-width: 400px; margin: 40px auto; background: #242b3a; border-radius: 16px; padding: 2em; box-shadow: 0 2px 18px #0008;}
+    h1 { text-align: center; color: #49caff; margin-bottom: 1.5em;}
+    .dato { font-size: 1.6em; margin: 1em 0;}
+    #connect { background: #49caff; color: #fff; border: none; border-radius: 10px; padding: 0.7em 1.5em; font-size: 1.1em; cursor: pointer;}
+    #connect:hover { background: #1b7bb8; }
+    #stato { margin-top: 1em; text-align: center; min-height: 2em; }
+    .label { color: #bbb; font-size: .7em; }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <h1>OBD BLE Dashboard</h1>
+    <button id="connect">Connetti ESP32</button>
+    <div id="stato"></div>
+    <div id="dati">
+      <div class="dato"><span class="label">RPM</span>: --</div>
+      <div class="dato"><span class="label">Velocità</span>: -- km/h</div>
+      <div class="dato"><span class="label">Temp</span>: -- °C</div>
+      <div class="dato"><span class="label">Carburante</span>: -- %</div>
+      <div class="dato"><span class="label">MIL</span>: --</div>
+      <div class="dato"><span class="label">Errori</span>: --</div>
+    </div>
+  </div>
+
+  <script>
+    let bleCharacteristic;
+
+    document.getElementById('connect').onclick = async () => {
+      try {
+        document.getElementById('stato').innerText = "Cerco ESP32 BLE...";
+        const device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: ['0000ff00-0000-1000-8000-00805f9b34fb']
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('0000ff00-0000-1000-8000-00805f9b34fb');
+        bleCharacteristic = await service.getCharacteristic('0000ff01-0000-1000-8000-00805f9b34fb');
+        await bleCharacteristic.startNotifications();
+
+        bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+          const val = new TextDecoder().decode(event.target.value);
+          console.log("BLE dato:", val);
+          mostraDati(val);
+        });
+
+        document.getElementById('stato').innerText = "Connesso, in attesa dati...";
+      } catch (err) {
+        document.getElementById('stato').innerText = "Errore: " + err;
+        console.error(err);
+      }
+    };
+
+    function mostraDati(str) {
+      // Parsing tipo: RPM:1500;SPEED:50;TEMP:77;FUEL:35.5;MIL:1;ERROR_CODES:NONE;
+      const dati = {};
+      str.split(';').forEach(campo => {
+        if (campo.trim()) {
+          let [k, v] = campo.split(':');
+          dati[k] = v;
+        }
+      });
+      document.getElementById('dati').innerHTML = `
+        <div class="dato"><span class="label">RPM</span>: ${dati.RPM || '--'}</div>
+        <div class="dato"><span class="label">Velocità</span>: ${dati.SPEED || '--'} km/h</div>
+        <div class="dato"><span class="label">Temp</span>: ${dati.TEMP || '--'} °C</div>
+        <div class="dato"><span class="label">Carburante</span>: ${dati.FUEL || '--'} %</div>
+        <div class="dato"><span class="label">MIL</span>: ${dati.MIL == 1 ? 'ON' : dati.MIL == 0 ? 'OFF' : '--'}</div>
+        <div class="dato"><span class="label">Errori</span>: ${dati.ERROR_CODES && dati.ERROR_CODES !== 'NONE' ? dati.ERROR_CODES : 'Nessuno'}</div>
+      `;
+    }
+  </script>
+</body>
+</html>
