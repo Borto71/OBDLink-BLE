@@ -5,12 +5,11 @@ Include anche: salvataggio degli errori su **SPIFFS**, download/reset degli erro
 
 ---
 
-## Architettura in 1 minuto
+## Architettura del sistema
 
-- **Python** genera pacchetti `key:value;...` (o legge davvero dall’OBD) e li spara sulla **seriale** a 115200.  
-- **ESP32 firmware** fa da bridge **UART↔BLE notify**, effettua il **parsing** e, se rileva errori, **snapshotta** su SPIFFS (CSV).  
-- **Web app** (HTML/JS) si connette via **Web Bluetooth** (service `0xFF00`, char `0xFF01`) e mostra dashboard, log e gestione errori (GET/RESET).
-
+- **Modulo Python**: genera in maniera simulata (o acquisisce da un’interfaccia OBD reale) pacchetti dati nel formato `chiave:valore;...` e li trasmette tramite interfaccia **seriale** a 115200 baud verso l’ESP32.  
+- **Firmware ESP32**: funge da bridge **UART ↔ BLE** con notifiche in tempo reale, esegue il **parsing** dei pacchetti ricevuti e, in presenza di codici di errore, effettua il **salvataggio (“snapshot”)** su memoria SPIFFS in formato CSV.  
+- **Interfaccia Web**: applicazione **HTML/JavaScript** che, tramite **Web Bluetooth API**, si connette al servizio BLE (UUID `0xFF00`, caratteristica `0xFF01`) dell’ESP32 per la visualizzazione in tempo reale dei dati telemetrici, la consultazione dei registri di errore e l’esecuzione di comandi di gestione (`GET_ALL_ERRORS`, `RESET_ERRORS`).
 ---
 
 ## Repository
