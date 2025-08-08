@@ -1,79 +1,437 @@
 <!DOCTYPE html>
-<html>
+<html lang="it">
 <head>
-  <meta charset="utf-8">
-  <title>OBD BLE Dashboard</title>
-  <style>
-    body { background: #181c25; color: #fff; font-family: Arial, sans-serif; padding: 40px;}
-    .dashboard { max-width: 400px; margin: 40px auto; background: #242b3a; border-radius: 16px; padding: 2em; box-shadow: 0 2px 18px #0008;}
-    h1 { text-align: center; color: #49caff; margin-bottom: 1.5em;}
-    .dato { font-size: 1.6em; margin: 1em 0;}
-    #connect { background: #49caff; color: #fff; border: none; border-radius: 10px; padding: 0.7em 1.5em; font-size: 1.1em; cursor: pointer;}
-    #connect:hover { background: #1b7bb8; }
-    #stato { margin-top: 1em; text-align: center; min-height: 2em; }
-    .label { color: #bbb; font-size: .7em; }
-  </style>
+  <meta charset="UTF-8">
+  <title>ESP32 OBD BLE Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-gauges/gauge.min.js"></script>
 </head>
 <body>
-  <div class="dashboard">
-    <h1>OBD BLE Dashboard</h1>
-    <button id="connect">Connetti ESP32</button>
-    <div id="stato"></div>
-    <div id="dati">
-      <div class="dato"><span class="label">RPM</span>: --</div>
-      <div class="dato"><span class="label">Velocità</span>: -- km/h</div>
-      <div class="dato"><span class="label">Temp</span>: -- °C</div>
-      <div class="dato"><span class="label">Carburante</span>: -- %</div>
-      <div class="dato"><span class="label">MIL</span>: --</div>
-      <div class="dato"><span class="label">Errori</span>: --</div>
-    </div>
-  </div>
+<header class="main-header">
+  <img src="logo-obdlink.png" alt="OBD-Link Logo" class="logo-obdlink">
+  <div class="header-title">ESP32 OBD Dashboard</div>
+  <button id="connect" class="connect-btn">🔗 Connetti BLE</button>
+</header>
+
+  <nav class="sidebar">
+    <button class="nav-btn active" onclick="showTab(0)">Dashboard</button>
+    <button class="nav-btn" onclick="showTab(1)">Errori</button>
+    <button class="nav-btn" onclick="showTab(2)">Log</button>
+    <button class="nav-btn" onclick="showTab(3)">Errori memorizzati</button>
+  </nav>
+
+  <main class="main-content">
+    <!-- Dashboard -->
+    <section id="page0" class="page active">
+      <div class="dashboard-row">
+        <div class="stat-card">
+          <div class="stat-label">Giri motore</div>
+          <div class="stat-value" id="rpm">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Velocità</div>
+          <div class="stat-value" id="speed">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Temp. acqua</div>
+          <div class="stat-value" id="temp">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Carburante</div>
+          <div class="stat-value" id="fuel">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Spia MIL</div>
+          <div class="stat-value" id="mil">—</div>
+        </div>
+      </div>
+
+      <!-- Info veicolo live -->
+      <div class="vehicle-info" id="vehicleInfo" style="margin: 1.2em 0 2.1em 0; display: none;"></div>
+
+      <div class="dashboard-box-row">
+        <div class="gauge-panel">
+          <canvas id="rpmGauge" width="200" height="200"></canvas>
+          <canvas id="speedGauge" width="200" height="200"></canvas>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-tabs">
+            <button class="chart-btn active" onclick="showChart(0)">RPM</button>
+            <button class="chart-btn" onclick="showChart(1)">Velocità</button>
+            <button class="chart-btn" onclick="showChart(2)">Temperatura</button>
+          </div>
+          <canvas id="historyChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Errori Live -->
+    <section id="page1" class="page">
+      <div id="errordiv"></div>
+    </section>
+
+    <!-- Log -->
+    <section id="page2" class="page logpage">
+      <h2>Log eventi BLE</h2>
+      <button id="clearlog" onclick="clearLog()">Pulisci Log</button>
+      <pre id="log">Log:</pre>
+    </section>
+
+    <!-- Errori ottenuti -->
+    <section id="page3" class="page">
+      <button id="getAllErrors" class="btn-outline">Scarica tutti gli errori</button>
+      <button id="resetAllErrors" class="btn-outline" style="margin-left:1em;background:#fff3f3;color:#d94d3a;border-color:#d94d3a;">Resetta errori salvati</button>
+      <div id="erroriOttenuti"></div>
+    </section>
+
+  </main>
 
   <script>
-    let bleCharacteristic;
+    // --- BLE UUID ---
+    const SERVICE_UUID = "0000ff00-0000-1000-8000-00805f9b34fb";
+    const CHARACTERISTIC_UUID = "0000ff01-0000-1000-8000-00805f9b34fb";
+
+    function showTab(n) {
+      document.querySelectorAll('.nav-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+      document.querySelectorAll('.page').forEach((p,i)=>p.classList.toggle('active',i===n));
+    }
+
+    function log(msg) {
+      let logBox = document.getElementById('log');
+      logBox.textContent += `\n${msg}`;
+      logBox.scrollTop = 99999;
+    }
+    function clearLog() {
+      document.getElementById('log').textContent = "Log:";
+    }
+
+    let lastErrorCodes = [];
+    let errorSnapshots = [];
+
+    // --- BLE: memoria globale per la characteristic
+    window.lastCharacteristic = null;
 
     document.getElementById('connect').onclick = async () => {
+      log("🔎 Scansione in corso...");
       try {
-        document.getElementById('stato').innerText = "Cerco ESP32 BLE...";
         const device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: ['0000ff00-0000-1000-8000-00805f9b34fb']
+          filters: [{ services: [SERVICE_UUID] }]
         });
+        log("Connesso, apro GATT...");
         const server = await device.gatt.connect();
-        const service = await server.getPrimaryService('0000ff00-0000-1000-8000-00805f9b34fb');
-        bleCharacteristic = await service.getCharacteristic('0000ff01-0000-1000-8000-00805f9b34fb');
-        await bleCharacteristic.startNotifications();
-
-        bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
-          const val = new TextDecoder().decode(event.target.value);
-          console.log("BLE dato:", val);
-          mostraDati(val);
+        log("Cerco servizio...");
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        log("Cerco caratteristica...");
+        const characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        log("Attivo notifiche...");
+        await characteristic.startNotifications();
+        characteristic.addEventListener('characteristicvaluechanged', event => {
+          const value = new TextDecoder().decode(event.target.value);
+          log(`📥 Dati ricevuti: ${value.trim()}`);
+          parseObdData(value.trim());
         });
-
-        document.getElementById('stato').innerText = "Connesso, in attesa dati...";
-      } catch (err) {
-        document.getElementById('stato').innerText = "Errore: " + err;
-        console.error(err);
+        window.lastCharacteristic = characteristic;
+        log("✅ Collegato! In attesa di dati...");
+      } catch (e) {
+        log("❌ Errore: " + e);
       }
     };
 
-    function mostraDati(str) {
-      // Parsing tipo: RPM:1500;SPEED:50;TEMP:77;FUEL:35.5;MIL:1;ERROR_CODES:NONE;
-      const dati = {};
-      str.split(';').forEach(campo => {
-        if (campo.trim()) {
-          let [k, v] = campo.split(':');
-          dati[k] = v;
+    // ------ GAUGE + 3 CHART.js ------
+    const historyLength = 30;
+    const rpmData = [], speedData = [], tempData = [], timeLabels = [];
+    let currentChart = 0;
+    const chartColors = ["#2288cc", "#33aa77", "#ffb400"];
+    const chartLabels = ["RPM", "Velocità (km/h)", "Temperatura (°C)"];
+    const chartYAxis = [
+      {min:0,max:7000,label:'RPM',color:'#2288cc'},
+      {min:0,max:220,label:'km/h',color:'#33aa77'},
+      {min:0,max:150,label:'°C',color:'#ffb400'}
+    ];
+    let chart;
+
+    function createChart(idx) {
+      if(chart) chart.destroy();
+      chart = new Chart(document.getElementById('historyChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: timeLabels,
+          datasets: [{
+            label: chartLabels[idx],
+            data: idx==0 ? rpmData : idx==1 ? speedData : tempData,
+            borderWidth: 2,
+            borderColor: chartColors[idx],
+            backgroundColor: chartColors[idx] + "22",
+            pointRadius: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: "#2b3440", font: { size: 15 } } } },
+          scales: {
+            y: {
+              min: chartYAxis[idx].min,
+              max: chartYAxis[idx].max,
+              title: {display:true, text: chartYAxis[idx].label},
+              ticks: {color: chartYAxis[idx].color}
+            },
+            x: { ticks:{color:"#5a6370"} }
+          },
+          interaction: { mode: 'nearest', axis: 'x' }
         }
       });
-      document.getElementById('dati').innerHTML = `
-        <div class="dato"><span class="label">RPM</span>: ${dati.RPM || '--'}</div>
-        <div class="dato"><span class="label">Velocità</span>: ${dati.SPEED || '--'} km/h</div>
-        <div class="dato"><span class="label">Temp</span>: ${dati.TEMP || '--'} °C</div>
-        <div class="dato"><span class="label">Carburante</span>: ${dati.FUEL || '--'} %</div>
-        <div class="dato"><span class="label">MIL</span>: ${dati.MIL == 1 ? 'ON' : dati.MIL == 0 ? 'OFF' : '--'}</div>
-        <div class="dato"><span class="label">Errori</span>: ${dati.ERROR_CODES && dati.ERROR_CODES !== 'NONE' ? dati.ERROR_CODES : 'Nessuno'}</div>
-      `;
+    }
+    function showChart(idx) {
+      currentChart = idx;
+      document.querySelectorAll('.chart-btn').forEach((b,i)=>b.classList.toggle('active',i===idx));
+      createChart(idx);
+    }
+    var rpmGauge = new RadialGauge({
+        renderTo: 'rpmGauge',
+        width: 200, height: 200,
+        units: "RPM",
+        minValue: 0, maxValue: 7000,
+        majorTicks: ["0","1000","2000","3000","4000","5000","6000","7000"],
+        minorTicks: 2,
+        highlights: [{ from: 6000, to: 7000, color: "#ff465e" }],
+        colorPlate: "#edf1f8",
+        colorMajorTicks: "#2288cc", colorMinorTicks: "#90caf9",
+        colorNumbers: "#222", colorNeedle: "#33aa77", colorTitle: "#2288cc",
+        borders: false, needleType: "arrow", needleWidth: 4, needleCircleSize: 10,
+        animationDuration: 600, animationRule: "linear"
+    }).draw();
+    var speedGauge = new RadialGauge({
+        renderTo: 'speedGauge',
+        width: 200, height: 200,
+        units: "km/h",
+        minValue: 0, maxValue: 220,
+        majorTicks: ["0","20","40","60","80","100","120","140","160","180","200","220"],
+        minorTicks: 2,
+        highlights: [{ from: 150, to: 220, color: "#ff465e" }],
+        colorPlate: "#edf1f8",
+        colorMajorTicks: "#33aa77", colorMinorTicks: "#b7e6c5",
+        colorNumbers: "#222", colorNeedle: "#2288cc", colorTitle: "#33aa77",
+        borders: false, needleType: "arrow", needleWidth: 4, needleCircleSize: 10,
+        animationDuration: 600, animationRule: "linear"
+    }).draw();
+
+    window.onload = () => createChart(0);
+
+    // --- ULTIMO PACCHETTO DATI VEICOLO (per mostrare box live) ---
+    let latestVehicleData = {};
+
+    function parseObdData(data) {
+      let values = {};
+      data.split(";").forEach(field => {
+        if (!field.includes(":")) return;
+        let [k,v] = field.split(":");
+        values[k.trim()] = v.trim();
+      });
+
+      if (values.RPM)    document.getElementById('rpm').textContent   = values.RPM + " rpm";
+      if (values.SPEED)  document.getElementById('speed').textContent = values.SPEED + " km/h";
+      if (values.TEMP)   document.getElementById('temp').textContent  = values.TEMP + " °C";
+      if (values.FUEL)   document.getElementById('fuel').textContent  = values.FUEL + " %";
+      if (values.MIL)    document.getElementById('mil').textContent   = (values.MIL === "1" ? "Accesa ⚠️" : "Spenta");
+      if (values.RPM)   rpmGauge.value = parseInt(values.RPM) || 0;
+      if (values.SPEED) speedGauge.value = parseInt(values.SPEED) || 0;
+
+      let now = new Date();
+      let label = now.getHours().toString().padStart(2,"0") + ":" +
+                  now.getMinutes().toString().padStart(2,"0") + ":" +
+                  now.getSeconds().toString().padStart(2,"0");
+      timeLabels.push(label);
+      rpmData.push(values.RPM ? parseInt(values.RPM) : null);
+      speedData.push(values.SPEED ? parseInt(values.SPEED) : null);
+      tempData.push(values.TEMP ? parseFloat(values.TEMP) : null);
+
+      if (timeLabels.length > historyLength) {
+        timeLabels.shift(); rpmData.shift(); speedData.shift(); tempData.shift();
+      }
+      createChart(currentChart);
+
+      // Mostra box con info veicolo live, se disponibili
+      if (values.MARCA || values.MODELLO || values.VIN || values.TARGA || values.KM) {
+        latestVehicleData = {
+          marca: values.MARCA || "-",
+          modello: values.MODELLO || "-",
+          vin: values.VIN || "-",
+          targa: values.TARGA || "-",
+          km: values.KM || "-"
+        };
+        document.getElementById('vehicleInfo').style.display = "block";
+        document.getElementById('vehicleInfo').innerHTML = `
+          <div class="veh-row">
+            <span><b>Marca:</b> ${latestVehicleData.marca}</span> &nbsp;
+            <span><b>Modello:</b> ${latestVehicleData.modello}</span> &nbsp;
+            <span><b>VIN:</b> <span style="font-family:monospace;">${latestVehicleData.vin}</span></span> &nbsp;
+            <span><b>Targa:</b> ${latestVehicleData.targa}</span> &nbsp;
+            <span><b>KM:</b> ${latestVehicleData.km}</span>
+          </div>
+        `;
+      }
+
+      let errordiv = document.getElementById('errordiv');
+
+      if (values.ERROR_CODES && values.ERROR_CODES !== "NONE" && values.ERROR_CODES !== "") {
+        let uniqueId = (values.ERROR_CODES || "") + "_" + (values.RPM||"") + "_" + (values.SPEED||"") + "_" + (values.TEMP||"") + "_" + (values.FUEL||"") + "_" + (values.MIL||"");
+        if (!errorSnapshots.some(e => e.uniqueId === uniqueId)) {
+          errorSnapshots.unshift({
+            timestamp: now,
+            formattedTime: now.toLocaleTimeString('it-IT') + " " + now.toLocaleDateString('it-IT'),
+            errorCode: values.ERROR_CODES,
+            rpm: values.RPM || "-",
+            speed: values.SPEED || "-",
+            temp: values.TEMP || "-",
+            fuel: values.FUEL || "-",
+            mil: values.MIL || "-",
+            raw: data,
+            uniqueId: uniqueId,
+            marca: values.MARCA || "-",
+            modello: values.MODELLO || "-",
+            vin: values.VIN || "-",
+            targa: values.TARGA || "-",
+            km: values.KM || "-"
+          });
+          if (errorSnapshots.length > 20) errorSnapshots.pop();
+        }
+      }
+
+      if (!errorSnapshots.length) {
+        errordiv.innerHTML = `<div class="error-box error-ok">Nessun errore rilevato ✅</div>`;
+      } else {
+        errordiv.innerHTML = errorSnapshots.map((e, idx) => `
+          <div class="error-box" style="cursor:pointer;" onclick="toggleErrorDetail(${idx})">
+            <div>
+              <b>${e.errorCode}</b> <span style="font-size:0.97em;opacity:.8;">(${e.formattedTime})</span>
+              <br>⚠️ <span>Dettagli...</span>
+            </div>
+            <div id="errordetail${idx}" style="display:none;text-align:left;margin-top:.7em;background:#fff2;padding:0.5em 0.7em;border-radius:8px;">
+              <b>RPM:</b> ${e.rpm}<br>
+              <b>Velocità:</b> ${e.speed} km/h<br>
+              <b>Temperatura:</b> ${e.temp} °C<br>
+              <b>Carburante:</b> ${e.fuel} %<br>
+              <b>MIL:</b> ${e.mil === "1" ? "Accesa ⚠️" : (e.mil === "0" ? "Spenta" : e.mil)}<br>
+              <b>Codice errore:</b> ${e.errorCode}<br>
+              <b>Marca:</b> ${e.marca} <b>Modello:</b> ${e.modello}<br>
+              <b>VIN:</b> <span style="font-family:monospace;">${e.vin}</span> <b>Targa:</b> ${e.targa}<br>
+              <b>KM:</b> ${e.km}
+              <br><span style="color:#bbb;font-size:.95em">Ricevuto: ${e.raw}</span>
+            </div>
+          </div>
+        `).join("");
+      }
+    }
+
+    function toggleErrorDetail(idx) {
+      let detail = document.getElementById('errordetail' + idx);
+      if (!detail) return;
+      detail.style.display = (detail.style.display === "none" ? "block" : "none");
+    }
+
+    // ===== Errori Ottenuti (da memoria ESP32 via BLE) =====
+    let allErrors = [];
+   let errorHandler = null;
+
+  document.getElementById('getAllErrors').onclick = async () => {
+      if (!window.lastCharacteristic) {
+        alert("Collegati prima al dispositivo!");
+        return;
+      }
+      allErrors = [];
+      document.getElementById('erroriOttenuti').innerHTML = "Richiesta errori...";
+
+      // *** DISABILITA RESET! ***
+      document.getElementById('resetAllErrors').disabled = true;
+      document.getElementById('resetAllErrors').style.opacity = "0.6";
+      document.getElementById('resetAllErrors').style.cursor = "not-allowed";
+
+      if(errorHandler) window.lastCharacteristic.removeEventListener('characteristicvaluechanged', errorHandler);
+
+      errorHandler = event => {
+        let str = new TextDecoder().decode(event.target.value);
+
+    if (str.startsWith("END_OF_ERRORS")) {
+      window.lastCharacteristic.removeEventListener('characteristicvaluechanged', errorHandler);
+      errorHandler = null;
+
+      // *** RIABILITA RESET! ***
+      document.getElementById('resetAllErrors').disabled = false;
+      document.getElementById('resetAllErrors').style.opacity = "";
+      document.getElementById('resetAllErrors').style.cursor = "";
+
+      // *** FORZA DISCONNESSIONE BLE ***
+      if (window.lastCharacteristic && window.lastCharacteristic.service && window.lastCharacteristic.service.device && window.lastCharacteristic.service.device.gatt.connected) {
+        window.lastCharacteristic.service.device.gatt.disconnect();
+        log("🔌 Dispositivo disconnesso automaticamente dopo download errori. Premi di nuovo 'Connetti BLE' per operazioni successive.");
+        window.lastCharacteristic = null;
+      }
+
+      return;
+    }
+
+
+        let parts = str.trim().split(",");
+        if (parts.length >= 12) {
+          let t = Number(parts[0]);
+          allErrors.push({
+            timestamp: t,
+            error_code: parts[1],
+            rpm: parts[2],
+            speed: parts[3],
+            temp: parts[4],
+            fuel: parts[5],
+            mil: parts[6],
+            marca: parts[7] || "-",
+            modello: parts[8] || "-",
+            vin: parts[9] || "-",
+            targa: parts[10] || "-",
+            km: parts[11] || "-",
+            date: new Date(Math.floor(t/1000))
+          });
+          renderAllErrors();
+        }
+      };
+
+      window.lastCharacteristic.addEventListener('characteristicvaluechanged', errorHandler);
+      await window.lastCharacteristic.writeValue(new TextEncoder().encode("GET_ALL_ERRORS"));
+    };
+
+
+    document.getElementById('resetAllErrors').onclick = async () => {
+      if (!window.lastCharacteristic) {
+        alert("Collegati prima al dispositivo!");
+        return;
+      }
+      if (!confirm("Sicuro di voler cancellare tutti gli errori salvati su ESP32?")) return;
+
+      await window.lastCharacteristic.writeValue(new TextEncoder().encode("RESET_ERRORS"));
+      document.getElementById('erroriOttenuti').innerHTML = "<i>Errori resettati dalla memoria ESP32.</i>";
+      allErrors = [];
+    };
+
+    function renderAllErrors() {
+      let div = document.getElementById('erroriOttenuti');
+      if (!allErrors.length) {
+        div.innerHTML = "<i>Nessun errore ricevuto</i>";
+        return;
+      }
+      div.innerHTML = allErrors.map(e => `
+        <div class="error-box saved">
+          <b>${e.error_code}</b> — ${e.date.toLocaleString('it-IT')}
+          <div style="font-size:.97em;margin-top:.4em;">
+            <b>Marca:</b> ${e.marca} <b>Modello:</b> ${e.modello}<br>
+            <b>VIN:</b> <span style="font-family:monospace;">${e.vin}</span> <b>Targa:</b> ${e.targa} <b>KM:</b> ${e.km}<br>
+            <b>RPM:</b> ${e.rpm} &nbsp;
+            <b>Vel:</b> ${e.speed} km/h &nbsp;
+            <b>Temp:</b> ${e.temp}°C &nbsp;
+            <b>Fuel:</b> ${e.fuel}% &nbsp;
+            <b>MIL:</b> ${e.mil=="1"?"Accesa":"Spenta"}
+          </div>
+        </div>
+      `).join("");
     }
   </script>
 </body>

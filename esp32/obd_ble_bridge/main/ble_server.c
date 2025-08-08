@@ -7,6 +7,7 @@
 #include "esp_gatts_api.h"
 #include "esp_bt_main.h"
 #include "esp_gatt_common_api.h"
+#include "error_snapshot.h"
 
 #define TAG "BLE_MINIMAL"
 
@@ -20,6 +21,7 @@ static uint16_t conn_id = 0;
 static uint16_t char_handle = 0;
 bool device_connected = false;
 
+// GATT Database
 static esp_gatts_attr_db_t gatt_db[] = {
     // Primary Service
     [0] = {
@@ -31,14 +33,14 @@ static esp_gatts_attr_db_t gatt_db[] = {
     [1] = {
         {ESP_GATT_AUTO_RSP},
         {ESP_UUID_LEN_16, (uint8_t*)&(uint16_t){ESP_GATT_UUID_CHAR_DECLARE}, ESP_GATT_PERM_READ,
-         sizeof(uint8_t), sizeof(uint8_t), (uint8_t*)&(uint8_t){ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY}}
+         sizeof(uint8_t), sizeof(uint8_t), (uint8_t*)&(uint8_t){ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_WRITE}}
     },
     // Characteristic Value
     [2] = {
         {ESP_GATT_RSP_BY_APP},
         {ESP_UUID_LEN_16, (uint8_t*)&(uint16_t){CHAR_UUID},
-         ESP_GATT_PERM_READ,
-         128, 0, NULL}
+         ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+         240, 0, NULL}
     },
     // Client Characteristic Configuration Descriptor (CCCD)
     [3] = {
@@ -63,30 +65,31 @@ void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t 
     }
 }
 
+void send_ble_notify(const char *data, size_t len);
+
 void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                             esp_ble_gatts_cb_param_t *param) {
     switch (event) {
-case ESP_GATTS_REG_EVT: {
-    ESP_LOGI(TAG, "ESP_GATTS_REG_EVT");
-    esp_ble_gap_set_device_name("ESP32_OBD_BLE");
-    
-    // UUID 128bit per Chrome
-    static uint8_t adv_service_uuid128[16] = {
-        0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80,
-        0x00, 0x10, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00
-    };
-    esp_ble_adv_data_t adv_data = {
-        .set_scan_rsp = false,
-        .include_txpower = false,
-        .service_uuid_len = sizeof(adv_service_uuid128),
-        .p_service_uuid = adv_service_uuid128,
-        .flag = ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT,
-    };
-    esp_ble_gap_config_adv_data(&adv_data);
-    esp_ble_gatts_create_attr_tab(gatt_db, gatts_if, 4, 0);
-    break;
-}
+        case ESP_GATTS_REG_EVT: {
+            ESP_LOGI(TAG, "ESP_GATTS_REG_EVT");
+            esp_ble_gap_set_device_name("ESP32_OBD_BLE");
 
+            // UUID 128bit per Chrome
+            static uint8_t adv_service_uuid128[16] = {
+                0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80,
+                0x00, 0x10, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00
+            };
+            esp_ble_adv_data_t adv_data = {
+                .set_scan_rsp = false,
+                .include_txpower = false,
+                .service_uuid_len = sizeof(adv_service_uuid128),
+                .p_service_uuid = adv_service_uuid128,
+                .flag = ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT,
+            };
+            esp_ble_gap_config_adv_data(&adv_data);
+            esp_ble_gatts_create_attr_tab(gatt_db, gatts_if, 4, 0);
+            break;
+        }
 
         case ESP_GATTS_CREAT_ATTR_TAB_EVT:
             if (param->add_attr_tab.status == ESP_GATT_OK) {
@@ -135,7 +138,60 @@ case ESP_GATTS_REG_EVT: {
             if (param->write.handle == char_handle + 1 && param->write.len == 2) {
                 uint16_t cccd = param->write.value[1] << 8 | param->write.value[0];
                 ESP_LOGI(TAG, "CCCD write, value: 0x%04X", cccd);
+            } else if (param->write.handle == char_handle) {
+                // Comando custom ricevuto dalla web app
+                char cmd[32] = {0};
+                int len = param->write.len;
+                if (len >= sizeof(cmd)) len = sizeof(cmd)-1;
+                memcpy(cmd, param->write.value, len);
+
+                ESP_LOGI(TAG, "Comando BLE ricevuto: %s", cmd);
+
+                if (strncmp(cmd, "GET_ALL_ERRORS", strlen("GET_ALL_ERRORS")) == 0) {
+                    // USA BUFFER STATICO per evitare stack overflow!
+                    static error_snapshot_t snapshots[MAX_ERROR_SNAPSHOTS];
+                    int n = error_snapshot_load_all_from_file(snapshots, MAX_ERROR_SNAPSHOTS);
+                    for (int i = 0; i < n; ++i) {
+                        char buf[240];
+                        snprintf(buf, sizeof(buf), "%llu,%s,%d,%d,%d,%d,%d,%s,%s,%s,%s,%ld",
+                            snapshots[i].timestamp_us, snapshots[i].error_code,
+                            snapshots[i].rpm, snapshots[i].speed, snapshots[i].temp,
+                            snapshots[i].fuel, snapshots[i].mil,
+                            snapshots[i].marca, snapshots[i].modello, snapshots[i].vin,
+                            snapshots[i].targa, snapshots[i].km);
+                        send_ble_notify(buf, strlen(buf));
+                        vTaskDelay(pdMS_TO_TICKS(80)); // puoi aumentare se necessario
+                    }
+                    // INVIA SEGNALE DI FINE!
+                    send_ble_notify("END_OF_ERRORS", strlen("END_OF_ERRORS"));
+                } else if (strncmp(cmd, "RESET_ERRORS", strlen("RESET_ERRORS")) == 0) {
+                    error_snapshot_clear_file();
+                    ESP_LOGI(TAG, "Tutti gli errori sono stati resettati");
+                    send_ble_notify("ERRORS_CLEARED", strlen("ERRORS_CLEARED"));
+                }
             }
+            break;
+
+        // Eventi non usati
+        case ESP_GATTS_EXEC_WRITE_EVT:
+        case ESP_GATTS_MTU_EVT:
+        case ESP_GATTS_CONF_EVT:
+        case ESP_GATTS_UNREG_EVT:
+        case ESP_GATTS_CREATE_EVT:
+        case ESP_GATTS_ADD_INCL_SRVC_EVT:
+        case ESP_GATTS_ADD_CHAR_EVT:
+        case ESP_GATTS_ADD_CHAR_DESCR_EVT:
+        case ESP_GATTS_DELETE_EVT:
+        case ESP_GATTS_START_EVT:
+        case ESP_GATTS_STOP_EVT:
+        case ESP_GATTS_OPEN_EVT:
+        case ESP_GATTS_CANCEL_OPEN_EVT:
+        case ESP_GATTS_CLOSE_EVT:
+        case ESP_GATTS_LISTEN_EVT:
+        case ESP_GATTS_CONGEST_EVT:
+        case ESP_GATTS_RESPONSE_EVT:
+        case ESP_GATTS_SET_ATTR_VAL_EVT:
+        case ESP_GATTS_SEND_SERVICE_CHANGE_EVT:
             break;
 
         default:
@@ -162,7 +218,7 @@ void ble_init(void) {
 
 void send_ble_notify(const char *data, size_t len) {
     if (!device_connected) return;
-    if (!data || len == 0 || len > 128) return;
+    if (!data || len == 0 || len > 230) return;
 
     esp_err_t ret = esp_ble_gatts_send_indicate(
         gatts_if_for_notify, conn_id, char_handle, len, (uint8_t*)data, false

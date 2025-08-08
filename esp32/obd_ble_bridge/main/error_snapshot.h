@@ -13,10 +13,19 @@ typedef struct {
     int mil;
     char error_code[16];
     uint64_t timestamp_us;
+    // --- Nuovi campi veicolo
+    char marca[24];
+    char modello[24];
+    char vin[24];
+    char targa[16];
+    long km;
 } error_snapshot_t;
 
 // --- Gestione memoria volatile ---
-void error_snapshot_save(const char* error_code, int rpm, int speed, int temp, int fuel, int mil);
+void error_snapshot_save(
+    const char* error_code, int rpm, int speed, int temp, int fuel, int mil,
+    const char* marca, const char* modello, const char* vin, const char* targa, long km
+);
 int error_snapshot_get_count(void);
 const error_snapshot_t* error_snapshot_get(int idx);
 
