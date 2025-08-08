@@ -107,6 +107,23 @@ Apri: [http://localhost:8000](http://localhost:8000) → **Connetti BLE**.
 
 ---
 
+
+## Anteprima Web App
+
+Vista generale della dashboard e delle funzionalità dell'interfaccia web:
+
+![Dashboard principale](img/main.png)  
+*Dashboard in tempo reale con parametri OBD*
+
+![Schermata errori](img/error.png)  
+*Visualizzazione codici di errore attivi*
+
+![Log eventi BLE](img/log.png)  
+*Log connessioni e notifiche BLE*
+
+![Errori salvati](img/saved_err.png)  
+*Archivio errori memorizzati su SPIFFS*
+
 ## Troubleshooting
 
 - **Nessun device**: assicurati advertising attivo e browser compatibile.
