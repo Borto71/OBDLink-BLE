@@ -15,34 +15,35 @@
 #define SERVICE_UUID        0xFF00
 #define CHAR_UUID           0xFF01
 
+// Variabili globali per mantenere riferimenti agli handle BLE
 static uint16_t service_handle = 0;
 static esp_gatt_if_t gatts_if_for_notify = 0;
 static uint16_t conn_id = 0;
 static uint16_t char_handle = 0;
-bool device_connected = false;
+bool device_connected = false; // Stato connessione
 
 // GATT Database
 static esp_gatts_attr_db_t gatt_db[] = {
-    // Primary Service
+    // Servizio primario
     [0] = {
         {ESP_GATT_AUTO_RSP},
         {ESP_UUID_LEN_16, (uint8_t*)&(uint16_t){ESP_GATT_UUID_PRI_SERVICE}, ESP_GATT_PERM_READ,
          sizeof(uint16_t), sizeof(uint16_t), (uint8_t*)&(uint16_t){SERVICE_UUID}}
     },
-    // Characteristic Declaration
+    // Dichiarazione caratteristica (proprietà)
     [1] = {
         {ESP_GATT_AUTO_RSP},
         {ESP_UUID_LEN_16, (uint8_t*)&(uint16_t){ESP_GATT_UUID_CHAR_DECLARE}, ESP_GATT_PERM_READ,
          sizeof(uint8_t), sizeof(uint8_t), (uint8_t*)&(uint8_t){ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_WRITE}}
     },
-    // Characteristic Value
+    // Valore caratteristica (dati veri e propri)
     [2] = {
         {ESP_GATT_RSP_BY_APP},
         {ESP_UUID_LEN_16, (uint8_t*)&(uint16_t){CHAR_UUID},
          ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
          240, 0, NULL}
     },
-    // Client Characteristic Configuration Descriptor (CCCD)
+    // CCCD (Client Characteristic Configuration Descriptor) per abilitare notifiche
     [3] = {
         {ESP_GATT_AUTO_RSP},
         {ESP_UUID_LEN_16, (uint8_t*)&(uint16_t){ESP_GATT_UUID_CHAR_CLIENT_CONFIG},
@@ -51,9 +52,10 @@ static esp_gatts_attr_db_t gatt_db[] = {
     }
 };
 
+// Callback per eventi GAP (advertising, connessioni)
 void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
     switch (event) {
-        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT: // Advertising avviato
             if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
                 ESP_LOGI(TAG, "BLE advertising started");
             } else {
@@ -65,20 +67,24 @@ void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t 
     }
 }
 
+// Prototipo funzione per invio notifiche
 void send_ble_notify(const char *data, size_t len);
 
+// Callback per eventi GATT Server
 void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                             esp_ble_gatts_cb_param_t *param) {
     switch (event) {
-        case ESP_GATTS_REG_EVT: {
+        case ESP_GATTS_REG_EVT: { // Registrazione applicazione BLE completata
             ESP_LOGI(TAG, "ESP_GATTS_REG_EVT");
-            esp_ble_gap_set_device_name("ESP32_OBD_BLE");
+            esp_ble_gap_set_device_name("ESP32_OBD_BLE"); // Nome dispositivo BLE
 
-            // UUID 128bit per Chrome
+            // UUID a 128 bit (necessario per compatibilità con Chrome/Web Bluetooth)
             static uint8_t adv_service_uuid128[16] = {
                 0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80,
                 0x00, 0x10, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00
             };
+
+            // Configurazione advertising
             esp_ble_adv_data_t adv_data = {
                 .set_scan_rsp = false,
                 .include_txpower = false,
@@ -87,15 +93,18 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                 .flag = ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT,
             };
             esp_ble_gap_config_adv_data(&adv_data);
+            // Creazione tabella attributi GATT
             esp_ble_gatts_create_attr_tab(gatt_db, gatts_if, 4, 0);
             break;
         }
 
-        case ESP_GATTS_CREAT_ATTR_TAB_EVT:
+        case ESP_GATTS_CREAT_ATTR_TAB_EVT: // Creazione tabella attributi completata
             if (param->add_attr_tab.status == ESP_GATT_OK) {
                 service_handle = param->add_attr_tab.handles[0];
                 char_handle = param->add_attr_tab.handles[2];
-                esp_ble_gatts_start_service(service_handle);
+                esp_ble_gatts_start_service(service_handle); // Avvio servizio
+
+                // Avvio advertising
                 esp_ble_gap_start_advertising(&(esp_ble_adv_params_t){
                     .adv_int_min = 0x20,
                     .adv_int_max = 0x40,
@@ -109,16 +118,18 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             }
             break;
 
-        case ESP_GATTS_CONNECT_EVT:
+        case ESP_GATTS_CONNECT_EVT: // Dispositivo connesso
             ESP_LOGI(TAG, "Device connected");
             gatts_if_for_notify = gatts_if;
-            conn_id = param->connect.conn_id;
+            conn_id = param->connect.conn_id; // Salva interfaccia per notifiche
             device_connected = true;
             break;
 
-        case ESP_GATTS_DISCONNECT_EVT:
+        case ESP_GATTS_DISCONNECT_EVT: // Dispositivo disconnesso
             ESP_LOGI(TAG, "Device disconnected, restart advertising");
             device_connected = false;
+
+            // Riavvia advertising
             esp_ble_gap_start_advertising(&(esp_ble_adv_params_t){
                 .adv_int_min = 0x20,
                 .adv_int_max = 0x40,
@@ -129,18 +140,20 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             });
             break;
 
-        case ESP_GATTS_READ_EVT:
+        case ESP_GATTS_READ_EVT: // Lettura caratteristica
             ESP_LOGD(TAG, "ESP_GATTS_READ_EVT");
             break;
 
-        case ESP_GATTS_WRITE_EVT:
-            // Gestione CCCD
+        case ESP_GATTS_WRITE_EVT: // Scrittura caratteristica/CCCD
+            // Gestione CCCD (attivazione notifiche)
             if (param->write.handle == char_handle + 1 && param->write.len == 2) {
                 uint16_t cccd = param->write.value[1] << 8 | param->write.value[0];
                 ESP_LOGI(TAG, "CCCD write, value: 0x%04X", cccd);
+
+                // Scrittura valore caratteristica (comando custom)
             } else if (param->write.handle == char_handle) {
                 // Comando custom ricevuto dalla web app
-                char cmd[32] = {0};
+                char cmd[32] = {0}; // Buffer comando
                 int len = param->write.len;
                 if (len >= sizeof(cmd)) len = sizeof(cmd)-1;
                 memcpy(cmd, param->write.value, len);
@@ -148,7 +161,7 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                 ESP_LOGI(TAG, "Comando BLE ricevuto: %s", cmd);
 
                 if (strncmp(cmd, "GET_ALL_ERRORS", strlen("GET_ALL_ERRORS")) == 0) {
-                    // USA BUFFER STATICO per evitare stack overflow!
+                    // Usa buffer statico per evitare overflow dello stack
                     static error_snapshot_t snapshots[MAX_ERROR_SNAPSHOTS];
                     int n = error_snapshot_load_all_from_file(snapshots, MAX_ERROR_SNAPSHOTS);
                     for (int i = 0; i < n; ++i) {
@@ -159,8 +172,8 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                             snapshots[i].fuel, snapshots[i].mil,
                             snapshots[i].marca, snapshots[i].modello, snapshots[i].vin,
                             snapshots[i].targa, snapshots[i].km);
-                        send_ble_notify(buf, strlen(buf));
-                        vTaskDelay(pdMS_TO_TICKS(80)); // puoi aumentare se necessario
+                        send_ble_notify(buf, strlen(buf)); // Invio BLE
+                        vTaskDelay(pdMS_TO_TICKS(80)); // Pausa per evitare congestione BLE
                     }
                     // INVIA SEGNALE DI FINE!
                     send_ble_notify("END_OF_ERRORS", strlen("END_OF_ERRORS"));
@@ -199,26 +212,31 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
     }
 }
 
-// === API da chiamare dal main ===
+// === Funzione di inizializzazione BLE ===
 
 void ble_init(void) {
     esp_err_t ret;
 
+    // Rilascia memoria Bluetooth classico
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+
+    // Inizializza controller BLE
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
     ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
     ESP_ERROR_CHECK(esp_bluedroid_init());
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
+    // Registra callback GATT e GAP
     ESP_ERROR_CHECK(esp_ble_gatts_register_callback(ble_gatts_event_handler));
     ESP_ERROR_CHECK(esp_ble_gap_register_callback(ble_gap_event_handler));
-    ESP_ERROR_CHECK(esp_ble_gatts_app_register(0));
+    ESP_ERROR_CHECK(esp_ble_gatts_app_register(0)); // ID app GATT
 }
 
+// Invio notifiche BLE
 void send_ble_notify(const char *data, size_t len) {
-    if (!device_connected) return;
-    if (!data || len == 0 || len > 230) return;
+    if (!device_connected) return;  // Nessuna connessione, esce
+    if (!data || len == 0 || len > 230) return; // Controllo validità dati
 
     esp_err_t ret = esp_ble_gatts_send_indicate(
         gatts_if_for_notify, conn_id, char_handle, len, (uint8_t*)data, false
