@@ -115,7 +115,3 @@ Apri: [http://localhost:8000](http://localhost:8000) → **Connetti BLE**.
 - **SPIFFS vuoto**: verifica partizione in partition table.
 
 ---
-
-## Licenza
-
-MIT (o a scelta).
